@@ -92,6 +92,9 @@ private:
     const Xmm xmm_tmp = Xmm(3);
     const Vmm vmm_sum2 = Vmm(4);
     const Vmm vmm_sum3 = Vmm(5);
+    // Aliases reused in scaling phase (vmm_sum2/sum3 are dead after reduction)
+    const Vmm vmm_src1 = Vmm(4);
+    const Vmm vmm_tmp1 = Vmm(5);
     const Vmm vmm_dst = Vmm(6);
     const Xbyak::Reg64 reg_src = r8;
     const Xbyak::Reg64 reg_src_org = r13;

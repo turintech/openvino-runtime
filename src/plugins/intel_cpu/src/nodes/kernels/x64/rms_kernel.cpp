@@ -192,12 +192,47 @@ void jit_rms_kernel<isa>::generate() {
         vmulss(xmm_rsqrt, xmm_rsqrt, xmm_tmp);
     }
     vbroadcastss(vmm_rsqrt, xmm_rsqrt);
-    mov(reg_size, m_jcp.data_size / vec_size);
     mov(reg_src, reg_src_org);
-    align(16);
-    Xbyak::Label loop_mul;
-    L(loop_mul);
-    {
+
+    const size_t total_vecs = m_jcp.data_size / vec_size;
+    const size_t pairs = total_vecs / 2;
+    const size_t remainder_vecs = total_vecs % 2;
+    const size_t src_stride = vec_size * m_jcp.src_prc.size();
+    const size_t scale_stride = vec_size * sizeof(float);
+    const size_t dst_stride = vec_size * m_jcp.dst_prc.size();
+
+    // 2x-unrolled scaling loop: process 2 vectors per iteration
+    if (pairs > 0) {
+        mov(reg_size, pairs);
+        align(16);
+        Xbyak::Label loop_mul_2x;
+        L(loop_mul_2x);
+        {
+            load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false);
+            load(vmm_src1, reg_src, m_jcp.src_prc, vec_size, false, src_stride);
+            vmulps(vmm_src, vmm_src, vmm_rsqrt);
+            vmulps(vmm_src1, vmm_src1, vmm_rsqrt);
+            if (m_jcp.scale_size != 1) {
+                load(vmm_tmp, reg_scale, ov::element::f32, vec_size, false);
+                load(vmm_tmp1, reg_scale, ov::element::f32, vec_size, false, scale_stride);
+                vmulps(vmm_src, vmm_src, vmm_tmp);
+                vmulps(vmm_src1, vmm_src1, vmm_tmp1);
+            }
+            store(reg_dst, vmm_src, m_jcp.dst_prc, vec_size);
+            store(reg_dst, vmm_src1, m_jcp.dst_prc, vec_size, dst_stride);
+
+            add(reg_src, src_stride * 2);
+            if (m_jcp.scale_size != 1) {
+                add(reg_scale, scale_stride * 2);
+            }
+            add(reg_dst, dst_stride * 2);
+            dec(reg_size);
+            jnz(loop_mul_2x);
+        }
+    }
+
+    // Remainder: 0 or 1 full vector after pairs
+    if (remainder_vecs == 1) {
         load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false);
         vmulps(vmm_src, vmm_src, vmm_rsqrt);
         if (m_jcp.scale_size != 1) {
@@ -205,14 +240,11 @@ void jit_rms_kernel<isa>::generate() {
             vmulps(vmm_src, vmm_src, vmm_tmp);
         }
         store(reg_dst, vmm_src, m_jcp.dst_prc, vec_size);
-
-        add(reg_src, vec_size * m_jcp.src_prc.size());
+        add(reg_src, src_stride);
         if (m_jcp.scale_size != 1) {
-            add(reg_scale, vec_size * sizeof(float));
+            add(reg_scale, scale_stride);
         }
-        add(reg_dst, vec_size * m_jcp.dst_prc.size());
-        dec(reg_size);
-        jnz(loop_mul);
+        add(reg_dst, dst_stride);
     }
     // tail
     if (m_jcp.data_size % vec_size) {
